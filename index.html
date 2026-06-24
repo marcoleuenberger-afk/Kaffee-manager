@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kaffee Manager Pro Cloud</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase klassisch laden -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,15 +15,13 @@
 
   <div id="root" class="w-full max-w-md"></div>
 
-  <!-- Supabase als eigenständiges Modul laden, damit Babel nicht hineinfuscht -->
-  <script type="module">
-    import { createClient } from 'https://unpkg.com/@supabase/supabase-js@2/+esm'
-    
+  <!-- Verbindung separat aufbauen (Babel ignoriert dieses normale JavaScript) -->
+  <script>
     const SUPABASE_URL = "https://bjxhuwwxaiduklbxosgf.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeGh1d3d4YWlkdWtsYnhvc2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTk1MjUsImV4cCI6MjA5Nzg3NTUyNX0.KDHwhz83Z-TxZUDadNlKsbQNmMFxtZViEZDdOUawtVQ";
     
-    // Global für unser React-Skript verfügbar machen
-    window.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Über das globale 'supabase'-Objekt der CDN-Bibliothek instanziieren
+    window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   </script>
 
   <!-- React App Code -->
@@ -34,14 +34,11 @@
       const [errorMsg, setErrorMsg] = React.useState(null);
 
       React.useEffect(() => {
-        // Kurz warten, bis das Modul oben geladen und im window registriert ist
-        const checkSupabase = setInterval(() => {
-          if (window.supabase) {
-            clearInterval(checkSupabase);
-            fetchData();
-          }
-        }, 50);
-        return () => clearInterval(checkSupabase);
+        if (window.supabaseClient) {
+          fetchData();
+        } else {
+          setErrorMsg("Supabase-Bibliothek konnte nicht initialisiert werden.");
+        }
       }, []);
 
       const fetchData = async () => {
@@ -49,7 +46,7 @@
           setLoading(true);
           setErrorMsg(null);
           
-          const { data: preiseData, error: preiseError } = await window.supabase.from('kaffee_preise').select('*');
+          const { data: preiseData, error: preiseError } = await window.supabaseClient.from('kaffee_preise').select('*');
           if (preiseError) throw preiseError;
           
           if (preiseData && preiseData.length > 0) {
@@ -58,7 +55,7 @@
             setPrices(preiseObj);
           }
 
-          const { data: usersData, error: usersError } = await window.supabase.from('kaffee_users').select('*').order('sort_order', { ascending: true });
+          const { data: usersData, error: usersError } = await window.supabaseClient.from('kaffee_users').select('*').order('sort_order', { ascending: true });
           if (usersError) throw usersError;
           
           if (usersData) {
@@ -83,12 +80,12 @@
       const handlePriceChange = async (type, val) => {
         const neuerPreis = parseFloat(val) || 0;
         setPrices(prev => ({ ...prev, [type]: neuerPreis }));
-        await window.supabase.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
+        await window.supabaseClient.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
       };
 
       const handleNameChange = async (id, newName) => {
         setUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
-        await window.supabase.from('kaffee_users').update({ name: newName }).eq('id', id);
+        await window.supabaseClient.from('kaffee_users').update({ name: newName }).eq('id', id);
       };
 
       const updateCounter = async (id, field, delta) => {
@@ -104,7 +101,7 @@
         const neuerWert = Math.max(0, currentUser[field] + delta);
         setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: neuerWert } : u));
 
-        await window.supabase.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
+        await window.supabaseClient.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
       };
 
       const processedUsers = users.map(u => {
@@ -356,7 +353,7 @@
           </div>
 
           <div class="p-2 bg-gray-50 text-center text-[10px] text-gray-400 border-t border-gray-200 shrink-0">
-            Kaffee Manager Pro v2.0.2 (Cloud-Powered)
+            Kaffee Manager Pro v2.0.3 (Cloud-Powered)
           </div>
 
         </div>
