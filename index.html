@@ -4,31 +4,57 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kaffee Manager Pro Cloud</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
 </head>
 <body class="bg-gray-100 text-gray-800 flex justify-center p-2 antialiased font-sans">
 
   <div id="root" class="w-full max-w-md">
-    <div id="fallback-loader" class="flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2">
-      <span class="animate-spin text-3xl">☕</span> Kaffee Manager wird gestartet...
+    <div class="flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2 text-center">
+      <span class="animate-spin text-3xl">☕</span> 
+      <div id="app-status" class="text-sm font-mono mt-2 bg-white p-3 rounded-xl border shadow-sm">
+        Schritt 1: Initialisiere HTML...
+      </div>
     </div>
   </div>
 
   <script>
+    // Status-Update Funktion
+    function logStatus(msg) {
+      const el = document.getElementById('app-status');
+      if (el) el.innerText = msg;
+      console.log(msg);
+    }
+
+    logStatus("Schritt 2: HTML geladen. Prüfe Bibliotheken...");
+
     document.addEventListener("DOMContentLoaded", function() {
+      logStatus("Schritt 3: DOM bereit. Starte Konfiguration...");
+
       const SUPABASE_URL = "https://bjxhuwwxaiduklbxosgf.supabase.co";
       const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeGh1d3d4YWlkdWtsYnhvc2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTk1MjUsImV4cCI6MjA5Nzg3NTUyNX0.KDHwhz83Z-TxZUDadNlKsbQNmMFxtZViEZDdOUawtVQ";
       
+      if (typeof supabase === 'undefined') {
+        logStatus("❌ FEHLER: Supabase-Skript blockiert oder nicht geladen!");
+        return;
+      }
+      if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+        logStatus("❌ FEHLER: React-Bibliothek blockiert oder nicht geladen!");
+        return;
+      }
+
+      logStatus("Schritt 4: Bibliotheken OK. Erstelle Cloud-Client...");
+      
       try {
         window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      } catch (e) {
-        document.getElementById('root').innerHTML = "<div class='p-4 text-red-600 text-center font-bold'>Fehler bei der Client-Erstellung: " + e.message + "</div>";
+      } catch (err) {
+        logStatus("❌ FEHLER beim Cloud-Setup: " + err.message);
         return;
       }
       
+      logStatus("Schritt 5: Cloud-Client aktiv. Starte Kaffee-App...");
       const e = React.createElement;
 
       function App() {
@@ -47,11 +73,7 @@
             setLoading(true);
             setErrorMsg(null);
             
-            // Testverbindung mit Timeout, damit es nicht ewig hängt
-            const fetchPreise = window.supabaseClient.from('kaffee_preise').select('*');
-            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Zeitüberschreitung bei der Verbindung (Timeout). Prüfe deine Supabase- oder CORS-Einstellungen.")), 6000));
-            
-            const { data: preiseData, error: preiseError } = await Promise.race([fetchPreise, timeout]);
+            const { data: preiseData, error: preiseError } = await window.supabaseClient.from('kaffee_preise').select('*');
             if (preiseError) throw preiseError;
             
             if (preiseData && preiseData.length > 0) {
@@ -75,7 +97,7 @@
             }
           } catch (error) {
             console.error(error);
-            setErrorMsg(error.message || "Unbekannter Verbindungsfehler");
+            setErrorMsg(error.message || "Verbindungsfehler zur Datenbank");
           } finally {
             setLoading(false);
           }
@@ -132,7 +154,7 @@
         const finanzStabilitaetUser = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((closest, u) => Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest, qualifiedUsers[0]) : null;
 
         if (errorMsg) {
-          return e('div', { className: 'p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto text-center' },
+          return e('div', { className: 'p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto text-center font-sans' },
             e('p', { className: 'font-bold mb-1' }, 'Datenbank-Verbindungsfehler:'),
             e('p', { className: 'font-mono bg-white p-2 rounded border border-red-100 mb-2' }, errorMsg),
             e('button', { onClick: fetchData, className: 'w-full py-1.5 bg-red-600 text-white rounded font-bold' }, 'Erneut versuchen')
@@ -140,12 +162,12 @@
         }
 
         if (loading) {
-          return e('div', { className: 'flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2' },
-            e('span', { className: 'animate-spin text-2xl' }, '☕'), 'Verbinde mit Kaffee-Cloud...'
+          return e('div', { className: 'flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2 font-sans' },
+            e('span', { className: 'animate-spin text-2xl' }, '☕'), 'Lade Live-Stände aus der Cloud...'
           );
         }
 
-        return e('div', { className: 'w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 my-2 flex flex-col h-[95vh]' },
+        return e('div', { className: 'w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 my-2 flex flex-col h-[95vh] font-sans' },
           e('div', { className: 'p-4 bg-gray-50 text-center border-b border-gray-200 shrink-0' },
             e('h1', { className: 'text-xl font-bold text-amber-600 flex items-center justify-center gap-2' }, '☁️ Kaffee Manager Pro Cloud'),
             e('div', { className: 'grid grid-cols-2 gap-2 mt-3 bg-gray-200 p-1 rounded-xl' },
@@ -210,7 +232,7 @@
             ] : [
               e('div', { key: 'total-exp', className: 'bg-white p-4 rounded-2xl border border-gray-200 shadow-sm text-center' },
                 e('span', { className: 'text-[10px] text-gray-400 font-bold block tracking-wider' }, 'AUSGABEN GESAMT'),
-                e('span', { className: 'text-2xl font-black text-emerald-600' }, gesamtAusgaben.toFixed(2) + ' CHF')
+                e('span', { className: 'text-2xl font-black text-emerald-600' }, processedUsers.reduce((sum, u) => sum + u.kosten, 0).toFixed(2) + ' CHF')
               ),
               top3Dringlichkeit.length > 0 && e('div', { key: 'dringlichkeit', className: 'bg-red-50 border border-red-200 p-4 rounded-2xl shadow-sm text-xs' },
                 e('span', { className: 'text-red-700 font-bold block mb-2' }, '🚨 TOP 3 ZAHLUNGS-DRINGLICHKEIT (Mind. 10 Rnd)'),
@@ -262,11 +284,12 @@
                   )
                 )
               )
-            )
-          ]
+            ]
+          )
         );
       }
 
+      logStatus("Schritt 6: Rende React-Komponente...");
       const root = ReactDOM.createRoot(document.getElementById('root'));
       root.render(e(App));
     });
