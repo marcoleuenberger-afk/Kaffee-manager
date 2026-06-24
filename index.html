@@ -11,165 +11,188 @@
 </head>
 <body class="bg-gray-100 text-gray-800 flex justify-center p-2 antialiased font-sans">
 
-  <div id="root" class="w-full max-w-md"></div>
+  <div id="root" class="w-full max-w-md">
+    <div id="fallback-loader" class="flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2">
+      <span class="animate-spin text-3xl">☕</span> Kaffee Manager wird gestartet...
+    </div>
+  </div>
 
   <script>
-    // 1. Supabase Verbindung initialisieren
-    const SUPABASE_URL = "https://bjxhuwwxaiduklbxosgf.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeGh1d3d4YWlkdWtsYnhvc2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTk1MjUsImV4cCI6MjA5Nzg3NTUyNX0.KDHwhz83Z-TxZUDadNlKsbQNmMFxtZViEZDdOUawtVQ";
-    window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Sicherstellen, dass das Skript erst läuft, wenn das HTML komplett geladen ist
+    document.addEventListener("DOMContentLoaded", function() {
+      
+      // 1. Supabase initialisieren
+      const SUPABASE_URL = "https://bjxhuwwxaiduklbxosgf.supabase.co";
+      const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeGh1d3d4YWlkdWtsYnhvc2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTk1MjUsImV4cCI6MjA5Nzg3NTUyNX0.KDHwhz83Z-TxZUDadNlKsbQNmMFxtZViEZDdOUawtVQ";
+      
+      if (typeof supabase === 'undefined') {
+        document.getElementById('root').innerHTML = "<div class='p-4 text-red-600 text-center font-bold'>Fehler: Supabase-Bibliothek konnte nicht geladen werden. Bitte Internetverbindung prüfen.</div>";
+        return;
+      }
+      
+      window.supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      const e = React.createElement;
 
-    // 2. React Kurzschreibweise für native Elemente definieren (ersetzt JSX/Babel)
-    const e = React.createElement;
+      function App() {
+        const [activeTab, setActiveTab] = React.useState('input');
+        const [prices, setPrices] = React.useState({ espresso: 3.5, schale: 5.3 });
+        const [users, setUsers] = React.useState([]);
+        const [loading, setLoading] = React.useState(true);
+        const [errorMsg, setErrorMsg] = React.useState(null);
 
-    function App() {
-      const [activeTab, setActiveTab] = React.useState('input');
-      const [prices, setPrices] = React.useState({ espresso: 3.5, schale: 5.3 });
-      const [users, setUsers] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [errorMsg, setErrorMsg] = React.useState(null);
+        React.useEffect(() => {
+          fetchData();
+        }, []);
 
-      React.useEffect(() => {
-        fetchData();
-      }, []);
+        const fetchData = async () => {
+          try {
+            setLoading(true);
+            setErrorMsg(null);
+            
+            const { data: preiseData, error: preiseError } = await window.supabaseClient.from('kaffee_preise').select('*');
+            if (preiseError) throw preiseError;
+            
+            if (preiseData && preiseData.length > 0) {
+              const preiseObj = {};
+              preiseData.forEach(p => { preiseObj[p.id] = parseFloat(p.preis); });
+              setPrices(preiseObj);
+            }
 
-      const fetchData = async () => {
-        try {
-          setLoading(true);
-          setErrorMsg(null);
-          
-          const { data: preiseData, error: preiseError } = await window.supabaseClient.from('kaffee_preise').select('*');
-          if (preiseError) throw preiseError;
-          
-          if (preiseData && preiseData.length > 0) {
-            const preiseObj = {};
-            preiseData.forEach(p => { preiseObj[p.id] = parseFloat(p.preis); });
-            setPrices(preiseObj);
+            const { data: usersData, error: usersError } = await window.supabaseClient.from('kaffee_users').select('*').order('sort_order', { ascending: true });
+            if (usersError) throw usersError;
+            
+            if (usersData) {
+              setUsers(usersData.map(u => ({
+                id: u.id,
+                name: u.name,
+                rundenAnwesend: u.runden_anwesend || 0,
+                rundenBezahlt: u.runden_bezahlt || 0,
+                espresso: u.espresso || 0,
+                schale: u.schale || 0
+              })));
+            }
+          } catch (error) {
+            console.error("Fehler beim Abrufen der Daten:", error.message);
+            setErrorMsg(error.message);
+          } finally {
+            setLoading(false);
           }
+        };
 
-          const { data: usersData, error: usersError } = await window.supabaseClient.from('kaffee_users').select('*').order('sort_order', { ascending: true });
-          if (usersError) throw usersError;
-          
-          if (usersData) {
-            setUsers(usersData.map(u => ({
-              id: u.id,
-              name: u.name,
-              rundenAnwesend: u.runden_anwesend || 0,
-              rundenBezahlt: u.runden_bezahlt || 0,
-              espresso: u.espresso || 0,
-              schale: u.schale || 0
-            })));
-          }
-        } catch (error) {
-          console.error("Fehler:", error.message);
-          setErrorMsg(error.message);
-        } finally {
-          setLoading(false);
+        const handlePriceChange = async (type, val) => {
+          const neuerPreis = parseFloat(val) || 0;
+          setPrices(prev => ({ ...prev, [type]: neuerPreis }));
+          await window.supabaseClient.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
+        };
+
+        const handleNameChange = async (id, newName) => {
+          setUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
+          await window.supabaseClient.from('kaffee_users').update({ name: newName }).eq('id', id);
+        };
+
+        const updateCounter = async (id, field, delta) => {
+          let dbField = { rundenAnwesend: "runden_anwesend", rundenBezahlt: "runden_bezahlt", espresso: "espresso", schale: "schale" }[field];
+          const currentUser = users.find(u => u.id === id);
+          if (!currentUser) return;
+
+          const neuerWert = Math.max(0, currentUser[field] + delta);
+          setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: neuerWert } : u));
+          await window.supabaseClient.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
+        };
+
+        const processedUsers = users.map(u => {
+          const kosten = (u.espresso * prices.espresso) + (u.schale * prices.schale);
+          const quote = u.rundenAnwesend > 0 ? (u.rundenBezahlt / u.rundenAnwesend) * 100 : 0;
+          return { ...u, kosten, quote, avgProAnwesendeRunde: u.rundenAnwesend > 0 ? kosten / u.rundenAnwesend : 0 };
+        });
+
+        const gesamtAusgaben = processedUsers.reduce((sum, u) => sum + u.kosten, 0);
+        const totalAnwesenheiten = processedUsers.reduce((sum, u) => sum + u.rundenAnwesend, 0);
+        const activeUsers = processedUsers.filter(u => u.rundenAnwesend > 0);
+        
+        const usersWithSollQuote = activeUsers.map(u => {
+          const totalBezahltAlle = processedUsers.reduce((sum, usr) => sum + usr.rundenBezahlt, 0);
+          const erwarteteRundenBezahlt = totalBezahltAlle * (u.rundenAnwesend / (totalAnwesenheiten || 1));
+          return { ...u, individuelleSollQuoteInProzent: u.rundenAnwesend > 0 ? (erwarteteRundenBezahlt / u.rundenAnwesend) * 100 : 0, abweichung: u.quote - (u.rundenAnwesend > 0 ? (erwarteteRundenBezahlt / u.rundenAnwesend) * 100 : 0) };
+        });
+
+        const qualifiedUsers = usersWithSollQuote.filter(u => u.rundenAnwesend >= 10);
+        const generalQualifiedForAwards = processedUsers.filter(u => u.rundenAnwesend >= 10);
+        const top3Dringlichkeit = [...qualifiedUsers].sort((a, b) => a.abweichung - b.abweichung).slice(0, 3);
+
+        const getTopUser = (field) => generalQualifiedForAwards.length > 0
+          ? generalQualifiedForAwards.reduce((maxUser, u) => u[field] > maxUser[field] ? u : maxUser, generalQualifiedForAwards[0])
+          : (processedUsers[0] || { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 });
+        
+        const goenner = getTopUser('rundenBezahlt');
+        const dauerGast = getTopUser('rundenAnwesend');
+        const pechvogel = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((maxUser, u) => u.quote > maxUser.quote ? u : maxUser, qualifiedUsers[0]) : (processedUsers[0] || { name: '-', quote: 0 });
+        const finanzStabilitaetUser = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((closest, u) => Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest, qualifiedUsers[0]) : null;
+
+        if (errorMsg) {
+          return e('div', { className: 'p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto text-center' },
+            e('p', { className: 'font-bold mb-1' }, 'Datenbank-Verbindungsfehler:'),
+            e('p', { className: 'font-mono bg-white p-2 rounded border border-red-100 mb-2' }, errorMsg),
+            e('button', { onClick: fetchData, className: 'w-full py-1.5 bg-red-600 text-white rounded font-bold' }, 'Erneut versuchen')
+          );
         }
-      };
 
-      const handlePriceChange = async (type, val) => {
-        const neuerPreis = parseFloat(val) || 0;
-        setPrices(prev => ({ ...prev, [type]: neuerPreis }));
-        await window.supabaseClient.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
-      };
+        if (loading) {
+          return e('div', { className: 'flex flex-col items-center justify-center h-64 text-amber-600 font-semibold gap-2' },
+            e('span', { className: 'animate-spin text-2xl' }, '☕'), 'Verbinde mit Kaffee-Cloud...'
+          );
+        }
 
-      const handleNameChange = async (id, newName) => {
-        setUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
-        await window.supabaseClient.from('kaffee_users').update({ name: newName }).eq('id', id);
-      };
-
-      const updateCounter = async (id, field, delta) => {
-        let dbField = { rundenAnwesend: "runden_anwesend", rundenBezahlt: "runden_bezahlt", espresso: "espresso", schale: "schale" }[field];
-        const currentUser = users.find(u => u.id === id);
-        if (!currentUser) return;
-
-        const neuerWert = Math.max(0, currentUser[field] + delta);
-        setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: neuerWert } : u));
-        await window.supabaseClient.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
-      };
-
-      const processedUsers = users.map(u => {
-        const kosten = (u.espresso * prices.espresso) + (u.schale * prices.schale);
-        const quote = u.rundenAnwesend > 0 ? (u.rundenBezahlt / u.rundenAnwesend) * 100 : 0;
-        return { ...u, kosten, quote, avgProAnwesendeRunde: u.rundenAnwesend > 0 ? kosten / u.rundenAnwesend : 0 };
-      });
-
-      const gesamtAusgaben = processedUsers.reduce((sum, u) => sum + u.kosten, 0);
-      const totalAnwesenheiten = processedUsers.reduce((sum, u) => sum + u.rundenAnwesend, 0);
-      const activeUsers = processedUsers.filter(u => u.rundenAnwesend > 0);
-      
-      const usersWithSollQuote = activeUsers.map(u => {
-        const totalBezahltAlle = processedUsers.reduce((sum, usr) => sum + usr.rundenBezahlt, 0);
-        const erwarteteRundenBezahlt = totalBezahltAlle * (u.rundenAnwesend / (totalAnwesenheiten || 1));
-        return { ...u, individuelleSollQuoteInProzent: u.rundenAnwesend > 0 ? (erwarteteRundenBezahlt / u.rundenAnwesend) * 100 : 0, abweichung: u.quote - (u.rundenAnwesend > 0 ? (erwarteteRundenBezahlt / u.rundenAnwesend) * 100 : 0) };
-      });
-
-      const qualifiedUsers = usersWithSollQuote.filter(u => u.rundenAnwesend >= 10);
-      const generalQualifiedForAwards = processedUsers.filter(u => u.rundenAnwesend >= 10);
-      const top3Dringlichkeit = [...qualifiedUsers].sort((a, b) => a.abweichung - b.abweichung).slice(0, 3);
-
-      const getTopUser = (field) => generalQualifiedForAwards.length > 0
-        ? generalQualifiedForAwards.reduce((maxUser, u) => u[field] > maxUser[field] ? u : maxUser, generalQualifiedForAwards[0])
-        : (processedUsers[0] || { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 });
-      
-      const goenner = getTopUser('rundenBezahlt');
-      const dauerGast = getTopUser('rundenAnwesend');
-      const pechvogel = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((maxUser, u) => u.quote > maxUser.quote ? u : maxUser, qualifiedUsers[0]) : (processedUsers[0] || { name: '-', quote: 0 });
-      const finanzStabilitaetUser = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((closest, u) => Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest, qualifiedUsers[0]) : null;
-
-      if (errorMsg) {
-        return e('div', { className: 'p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto text-center' },
-          e('p', { className: 'font-bold mb-1' }, 'Datenbank-Verbindungsfehler:'),
-          e('p', { className: 'font-mono bg-white p-2 rounded border border-red-100 mb-2' }, errorMsg),
-          e('button', { onClick: fetchData, className: 'w-full py-1.5 bg-red-600 text-white rounded font-bold' }, 'Erneut versuchen')
-        );
-      }
-
-      if (loading) {
-        return e('div', { className: 'flex flex-col items-center justify-center h-screen text-amber-600 font-semibold gap-2' },
-          e('span', { className: 'animate-spin text-2xl' }, '☕'), 'Lade Live-Daten aus der Cloud...'
-        );
-      }
-
-      return e('div', { className: 'w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 my-2 flex flex-col h-[95vh]' },
-        // Header
-        e('div', { className: 'p-4 bg-gray-50 text-center border-b border-gray-200 shrink-0' },
-          e('h1', { className: 'text-xl font-bold text-amber-600 flex items-center justify-center gap-2' }, '☁️ Kaffee Manager Pro Cloud'),
-          e('div', { className: 'grid grid-cols-2 gap-2 mt-3 bg-gray-200 p-1 rounded-xl' },
-            e('button', { onClick: () => setActiveTab('input'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'input' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}` }, '📋 Input'),
-            e('button', { onClick: () => setActiveTab('stats'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'stats' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-600'}` }, '📊 Stats')
-          )
-        ),
-        // Content Container
-        e('div', { className: 'flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50' },
-          activeTab === 'input' ? [
-            // Preise
-            e('div', { key: 'prices', className: 'bg-white p-3 rounded-2xl border border-gray-200 flex justify-around text-xs shadow-sm' },
-              e('div', { className: 'flex items-center gap-2' },
-                e('span', { className: 'text-amber-600 font-semibold' }, 'Espresso:'),
-                e('input', { type: 'number', step: '0.1', value: prices.espresso, onChange: (e) => handlePriceChange('espresso', e.target.value), className: 'w-12 bg-gray-50 border border-gray-300 rounded text-center font-bold text-gray-800 py-0.5' }),
-                e('span', { className: 'text-gray-500' }, 'CHF')
+        return e('div', { className: 'w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 my-2 flex flex-col h-[95vh]' },
+          // Header
+          e('div', { className: 'p-4 bg-gray-50 text-center border-b border-gray-200 shrink-0' },
+            e('h1', { className: 'text-xl font-bold text-amber-600 flex items-center justify-center gap-2' }, '☁️ Kaffee Manager Pro Cloud'),
+            e('div', { className: 'grid grid-cols-2 gap-2 mt-3 bg-gray-200 p-1 rounded-xl' },
+              e('button', { onClick: () => setActiveTab('input'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'input' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}` }, '📋 Input'),
+              e('button', { onClick: () => setActiveTab('stats'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'stats' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-600'}` }, '📊 Stats')
+            )
+          ),
+          // Content Container
+          e('div', { className: 'flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50' },
+            activeTab === 'input' ? [
+              // Preise
+              e('div', { key: 'prices', className: 'bg-white p-3 rounded-2xl border border-gray-200 flex justify-around text-xs shadow-sm' },
+                e('div', { className: 'flex items-center gap-2' },
+                  e('span', { className: 'text-amber-600 font-semibold' }, 'Espresso:'),
+                  e('input', { type: 'number', step: '0.1', value: prices.espresso, onChange: (e) => handlePriceChange('espresso', e.target.value), className: 'w-12 bg-gray-50 border border-gray-300 rounded text-center font-bold text-gray-800 py-0.5' }),
+                  e('span', { className: 'text-gray-500' }, 'CHF')
+                ),
+                e('div', { className: 'flex items-center gap-2' },
+                  e('span', { className: 'text-amber-800 font-semibold' }, 'Schale:'),
+                  e('input', { type: 'number', step: '0.1', value: prices.schale, onChange: (e) => handlePriceChange('schale', e.target.value), className: 'w-12 bg-gray-50 border border-gray-300 rounded text-center font-bold text-gray-800 py-0.5' }),
+                  e('span', { className: 'text-gray-500' }, 'CHF')
+                ),
+                e('button', { onClick: fetchData, className: 'text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300' }, '🔄 Sync')
               ),
-              e('div', { className: 'flex items-center gap-2' },
-                e('span', { className: 'text-amber-800 font-semibold' }, 'Schale:'),
-                e('input', { type: 'number', step: '0.1', value: prices.schale, onChange: (e) => handlePriceChange('schale', e.target.value), className: 'w-12 bg-gray-50 border border-gray-300 rounded text-center font-bold text-gray-800 py-0.5' }),
-                e('span', { className: 'text-gray-500' }, 'CHF')
-              ),
-              e('button', { onClick: fetchData, className: 'text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300' }, '🔄 Sync')
-            ),
-            // User-Liste
-            users.map(user => e('div', { key: user.id, className: 'bg-white p-4 rounded-2xl border border-gray-200 space-y-3 shadow-sm' },
-              e('input', { type: 'text', value: user.name, onChange: (e) => handleNameChange(user.id, e.target.value), className: 'bg-transparent font-bold text-base text-gray-900 border-b border-transparent focus:border-amber-500 focus:outline-none w-full pb-1' }),
-              // Zeile 1: Anwesend & Bezahlt
-              e('div', { className: 'grid grid-cols-2 gap-3 text-xs' },
-                e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center' },
-                  e('span', { className: 'text-gray-500 text-[10px] font-bold mb-2' }, 'RUNDEN ANWESEND'),
-                  e('div', { className: 'flex items-center justify-between w-full px-1' },
-                    e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold shadow-sm' }, '-'),
-                    e('span', { className: 'text-sm font-bold text-gray-800' }, user.rundenAnwesend),
-                    e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold shadow-sm' }, '+')
+              // User-Liste
+              users.map(user => e('div', { key: user.id, className: 'bg-white p-4 rounded-2xl border border-gray-200 space-y-3 shadow-sm' },
+                e('input', { type: 'text', value: user.name, onChange: (e) => handleNameChange(user.id, e.target.value), className: 'bg-transparent font-bold text-base text-gray-900 border-b border-transparent focus:border-amber-500 focus:outline-none w-full pb-1' }),
+                e('div', { className: 'grid grid-cols-2 gap-3 text-xs' },
+                  e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center' },
+                    e('span', { className: 'text-gray-500 text-[10px] font-bold mb-2' }, 'RUNDEN ANWESEND'),
+                    e('div', { className: 'flex items-center justify-between w-full px-1' },
+                      e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold' }, '-'),
+                      e('span', { className: 'text-sm font-bold text-gray-800' }, user.rundenAnwesend),
+                      e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold' }, '+')
+                    )
+                  ),
+                  e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center' },
+                    e('span', { className: 'text-gray-500 text-[10px] font-bold mb-2' }, 'RUNDEN BEZAHLT'),
+                    e('div', { className: 'flex items-center justify-between w-full px-1' },
+                      e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold' }, '-'),
+                      e('span', { className: 'text-sm font-bold text-emerald-600' }, user.rundenBezahlt),
+                      e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg text-lg font-bold' }, '+')
+                    )
                   )
                 ),
-                e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center' },
-                  e('span', { className: 'text-gray-500 text-[10px] font-bold mb-2' }, 'RUNDEN BEZAHLT'),
+                e('div', { className: 'grid grid-cols-2 gap-3 text-xs' },
+                  e('div', { className: 'bg-amber-50/50 p-2 rounded-xl border border-amber-100 flex flex-col items-center' },
+                    e('span', { className: 'text-amber-800 text-[10px] font-bold mb-2' }, 'ESPRESSO'),
+                    e('div', { className: 'flex items-center justify-between w-full px-1' },
+                      e('button', { onClick: () => updateCounter(user.id, 'espresso', -1), className: 'w-10 h-10 bg-white border border-amber-200 rounded-lg text-lg font-bold text-amber-700' }, '-'),
+                      e('span', { className: 'text-sm font-bold text-gray-80
