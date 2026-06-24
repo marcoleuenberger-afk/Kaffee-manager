@@ -8,92 +8,89 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body class="bg-gray-100 text-gray-800 flex justify-center p-2 antialiased font-sans">
 
   <div id="root" class="w-full max-w-md"></div>
 
-  <script type="text/babel">
-    // Supabase Verbindungskonfiguration
+  <!-- Supabase als eigenständiges Modul laden, damit Babel nicht hineinfuscht -->
+  <script type="module">
+    import { createClient } from 'https://unpkg.com/@supabase/supabase-js@2/+esm'
+    
     const SUPABASE_URL = "https://bjxhuwwxaiduklbxosgf.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqeGh1d3d4YWlkdWtsYnhvc2dmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyOTk1MjUsImV4cCI6MjA5Nzg3NTUyNX0.KDHwhz83Z-TxZUDadNlKsbQNmMFxtZViEZDdOUawtVQ";
-    const supabase = Supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    
+    // Global für unser React-Skript verfügbar machen
+    window.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  </script>
 
+  <!-- React App Code -->
+  <script type="text/babel">
     function App() {
       const [activeTab, setActiveTab] = React.useState('input');
       const [prices, setPrices] = React.useState({ espresso: 3.5, schale: 5.3 });
       const [users, setUsers] = React.useState([]);
       const [loading, setLoading] = React.useState(true);
+      const [errorMsg, setErrorMsg] = React.useState(null);
 
-      // Daten beim Start aus Supabase laden
       React.useEffect(() => {
-        fetchData();
+        // Kurz warten, bis das Modul oben geladen und im window registriert ist
+        const checkSupabase = setInterval(() => {
+          if (window.supabase) {
+            clearInterval(checkSupabase);
+            fetchData();
+          }
+        }, 50);
+        return () => clearInterval(checkSupabase);
       }, []);
 
       const fetchData = async () => {
         try {
           setLoading(true);
+          setErrorMsg(null);
           
-          // Preise abrufen
-          const { data: preiseData, error: preiseError } = await supabase
-            .from('kaffee_preise')
-            .select('*');
-          
+          const { data: preiseData, error: preiseError } = await window.supabase.from('kaffee_preise').select('*');
           if (preiseError) throw preiseError;
           
-          const preiseObj = {};
-          preiseData.forEach(p => { preiseObj[p.id] = parseFloat(p.preis); });
-          setPrices(preiseObj);
+          if (preiseData && preiseData.length > 0) {
+            const preiseObj = {};
+            preiseData.forEach(p => { preiseObj[p.id] = parseFloat(p.preis); });
+            setPrices(preiseObj);
+          }
 
-          // User abrufen (sortiert nach sort_order)
-          const { data: usersData, error: usersError } = await supabase
-            .from('kaffee_users')
-            .select('*')
-            .order('sort_order', { ascending: true });
-          
+          const { data: usersData, error: usersError } = await window.supabase.from('kaffee_users').select('*').order('sort_order', { ascending: true });
           if (usersError) throw usersError;
           
-          // Mappen der DB-Spaltennamen (Snake_Case) auf die React-Variablen (CamelCase)
-          const mappedUsers = usersData.map(u => ({
-            id: u.id,
-            name: u.name,
-            rundenAnwesend: u.runden_anwesend,
-            rundenBezahlt: u.runden_bezahlt,
-            espresso: u.espresso,
-            schale: u.schale
-          }));
-          
-          setUsers(mappedUsers);
+          if (usersData) {
+            const mappedUsers = usersData.map(u => ({
+              id: u.id,
+              name: u.name,
+              rundenAnwesend: u.runden_anwesend || 0,
+              rundenBezahlt: u.runden_bezahlt || 0,
+              espresso: u.espresso || 0,
+              schale: u.schale || 0
+            }));
+            setUsers(mappedUsers);
+          }
         } catch (error) {
-          console.error("Fehler beim Laden der Daten aus der Cloud:", error.message);
+          console.error("Fehler:", error.message);
+          setErrorMsg(error.message);
         } finally {
           setLoading(false);
         }
       };
 
-      // Preisänderung in DB speichern
       const handlePriceChange = async (type, val) => {
         const neuerPreis = parseFloat(val) || 0;
         setPrices(prev => ({ ...prev, [type]: neuerPreis }));
-        
-        await supabase
-          .from('kaffee_preise')
-          .update({ preis: neuerPreis })
-          .eq('id', type);
+        await window.supabase.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
       };
 
-      // Namensänderung in DB speichern
       const handleNameChange = async (id, newName) => {
         setUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
-        
-        await supabase
-          .from('kaffee_users')
-          .update({ name: newName })
-          .eq('id', id);
+        await window.supabase.from('kaffee_users').update({ name: newName }).eq('id', id);
       };
 
-      // Zähler verändern und direkt in DB updaten
       const updateCounter = async (id, field, delta) => {
         let dbField = "";
         if (field === "rundenAnwesend") dbField = "runden_anwesend";
@@ -105,18 +102,11 @@
         if (!currentUser) return;
 
         const neuerWert = Math.max(0, currentUser[field] + delta);
-
-        // UI sofort aktualisieren (Optimistic Update)
         setUsers(prev => prev.map(u => u.id === id ? { ...u, [field]: neuerWert } : u));
 
-        // In Supabase speichern
-        await supabase
-          .from('kaffee_users')
-          .update({ [dbField]: neuerWert })
-          .eq('id', id);
+        await window.supabase.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
       };
 
-      // --- RECHENLOGIK ---
       const processedUsers = users.map(u => {
         const kosten = (u.espresso * prices.espresso) + (u.schale * prices.schale);
         const quote = u.rundenAnwesend > 0 ? (u.rundenBezahlt / u.rundenAnwesend) * 100 : 0;
@@ -139,14 +129,12 @@
       const qualifiedUsers = usersWithSollQuote.filter(u => u.rundenAnwesend >= 10);
       const generalQualifiedForAwards = processedUsers.filter(u => u.rundenAnwesend >= 10);
 
-      const top3Dringlichkeit = [...qualifiedUsers]
-        .sort((a, b) => a.abweichung - b.abweichung)
-        .slice(0, 3);
+      const top3Dringlichkeit = [...qualifiedUsers].sort((a, b) => a.abweichung - b.abweichung).slice(0, 3);
 
       const getTopUser = (field) => {
         return generalQualifiedForAwards.length > 0
           ? generalQualifiedForAwards.reduce((maxUser, u) => u[field] > maxUser[field] ? u : maxUser, generalQualifiedForAwards[0])
-          : processedUsers[0] || { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 };
+          : (processedUsers[0] || { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 });
       };
       
       const goenner = getTopUser('rundenBezahlt');
@@ -154,13 +142,23 @@
 
       const pechvogel = qualifiedUsers.length > 0 
         ? qualifiedUsers.reduce((maxUser, u) => u.quote > maxUser.quote ? u : maxUser, qualifiedUsers[0])
-        : processedUsers[0] || { name: '-', quote: 0 };
+        : (processedUsers[0] || { name: '-', quote: 0 });
 
       const finanzStabilitaetUser = qualifiedUsers.length > 0
         ? qualifiedUsers.reduce((closest, u) => {
             return Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest;
           }, qualifiedUsers[0])
         : null;
+
+      if (errorMsg) {
+        return (
+          <div class="p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto">
+            <p class="font-bold mb-1">Datenbank-Verbindungsfehler:</p>
+            <p class="font-mono bg-white p-2 rounded border border-red-100 mb-2">{errorMsg}</p>
+            <button onClick={fetchData} class="w-full py-1.5 bg-red-600 text-white rounded font-bold">Erneut versuchen</button>
+          </div>
+        );
+      }
 
       if (loading) {
         return (
@@ -358,7 +356,7 @@
           </div>
 
           <div class="p-2 bg-gray-50 text-center text-[10px] text-gray-400 border-t border-gray-200 shrink-0">
-            Kaffee Manager Pro v2.0.0 (Cloud-Powered)
+            Kaffee Manager Pro v2.0.2 (Cloud-Powered)
           </div>
 
         </div>
