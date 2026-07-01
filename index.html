@@ -37,8 +37,12 @@
         const [activeTab, setActiveTab] = React.useState('input');
         const [prices, setPrices] = React.useState({ espresso: 3.5, schale: 5.3 });
         const [users, setUsers] = React.useState([]);
+        const [history, setHistory] = React.useState([]);
+        const [selectedMonth, setSelectedMonth] = React.useState('');
         const [loading, setLoading] = React.useState(true);
         const [errorMsg, setErrorMsg] = React.useState(null);
+
+        const isReadOnly = new URLSearchParams(window.location.search).get('view') === 'only';
 
         React.useEffect(() => {
           fetchData();
@@ -51,7 +55,6 @@
             
             const { data: preiseData, error: preiseError } = await window.supabaseClient.from('kaffee_preise').select('*');
             if (preiseError) throw preiseError;
-            
             if (preiseData && preiseData.length > 0) {
               const preiseObj = {};
               preiseData.forEach(p => { preiseObj[p.id] = parseFloat(p.preis); });
@@ -60,16 +63,19 @@
 
             const { data: usersData, error: usersError } = await window.supabaseClient.from('kaffee_users').select('*').order('sort_order', { ascending: true });
             if (usersError) throw usersError;
-            
             if (usersData) {
               setUsers(usersData.map(u => ({
-                id: u.id,
-                name: u.name,
-                rundenAnwesend: u.runden_anwesend || 0,
-                rundenBezahlt: u.runden_bezahlt || 0,
-                espresso: u.espresso || 0,
-                schale: u.schale || 0
+                id: u.id, name: u.name, rundenAnwesend: u.runden_anwesend || 0, rundenBezahlt: u.runden_bezahlt || 0, espresso: u.espresso || 0, schale: u.schale || 0
               })));
+            }
+
+            const { data: historyData, error: historyError } = await window.supabaseClient.from('kaffee_history').select('*').order('created_at', { ascending: false });
+            if (historyError) throw historyError;
+            if (historyData) {
+              setHistory(historyData);
+              if (historyData.length > 0 && !selectedMonth) {
+                setSelectedMonth(historyData[0].monat_jahr);
+              }
             }
           } catch (error) {
             console.error(error);
@@ -80,17 +86,20 @@
         };
 
         const handlePriceChange = async (type, val) => {
+          if (isReadOnly) return;
           const neuerPreis = parseFloat(val) || 0;
           setPrices(prev => ({ ...prev, [type]: neuerPreis }));
           await window.supabaseClient.from('kaffee_preise').update({ preis: neuerPreis }).eq('id', type);
         };
 
         const handleNameChange = async (id, newName) => {
+          if (isReadOnly) return;
           setUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
           await window.supabaseClient.from('kaffee_users').update({ name: newName }).eq('id', id);
         };
 
         const updateCounter = async (id, field, delta) => {
+          if (isReadOnly) return;
           let dbField = { rundenAnwesend: "runden_anwesend", rundenBezahlt: "runden_bezahlt", espresso: "espresso", schale: "schale" }[field];
           const currentUser = users.find(u => u.id === id);
           if (!currentUser) return;
@@ -100,7 +109,6 @@
           await window.supabaseClient.from('kaffee_users').update({ [dbField]: neuerWert }).eq('id', id);
         };
 
-        // Download-Backup Funktion (JSON)
         const downloadBackup = () => {
           const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ prices, users }));
           const downloadAnchor = document.createElement('a');
@@ -111,6 +119,7 @@
           downloadAnchor.remove();
         };
 
+        // --- BERECHNUNG LIVE-STAND (ALL TIME) ---
         const processedUsers = users.map(u => {
           const kosten = (u.espresso * prices.espresso) + (u.schale * prices.schale);
           const quote = u.rundenAnwesend > 0 ? (u.rundenBezahlt / u.rundenAnwesend) * 100 : 0;
@@ -131,14 +140,94 @@
         const generalQualifiedForAwards = processedUsers.filter(u => u.rundenAnwesend >= 10);
         const top3Dringlichkeit = [...qualifiedUsers].sort((a, b) => a.abweichung - b.abweichung).slice(0, 3);
 
-        const getTopUser = (field) => generalQualifiedForAwards.length > 0
-          ? generalQualifiedForAwards.reduce((maxUser, u) => u[field] > maxUser[field] ? u : maxUser, generalQualifiedForAwards[0])
-          : (processedUsers[0] || { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 });
+        const getTopUser = (arr, field) => arr.length > 0
+          ? arr.reduce((maxUser, u) => u[field] > maxUser[field] ? u : maxUser, arr[0])
+          : { name: '-', rundenBezahlt: 0, kosten: 0, rundenAnwesend: 0 };
         
-        const goenner = getTopUser('rundenBezahlt');
-        const dauerGast = getTopUser('rundenAnwesend');
-        const pechvogel = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((maxUser, u) => u.quote > maxUser.quote ? u : maxUser, qualifiedUsers[0]) : (processedUsers[0] || { name: '-', quote: 0 });
+        const goenner = getTopUser(generalQualifiedForAwards, 'rundenBezahlt');
+        const dauerGast = getTopUser(generalQualifiedForAwards, 'rundenAnwesend');
+        const pechvogel = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((maxUser, u) => u.quote > maxUser.quote ? u : maxUser, qualifiedUsers[0]) : { name: '-', quote: 0 };
         const finanzStabilitaetUser = qualifiedUsers.length > 0 ? qualifiedUsers.reduce((closest, u) => Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest, qualifiedUsers[0]) : null;
+
+        // --- MONATLICHES BACKUP UND ISOLIERTE BERECHNUNG ---
+        const saveCurrentMonthSnapshot = async () => {
+          if (isReadOnly) return;
+          const monate = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+          const d = new Date();
+          const aktuellerMonatName = `${monate[d.getMonth()]} ${d.getFullYear()}`;
+          
+          const promptMonat = prompt("Für welchen Monat sollen die Zählerstände eingefroren werden?", aktuellerMonatName);
+          if (!promptMonat) return;
+
+          // Wir suchen, ob es einen Vormonat in der History gibt, um die Differenz zu bilden
+          let basisDaten = {};
+          if (history.length > 0) {
+            // Nimm die Rohdaten des chronologisch letzten Eintrags
+            basisDaten = history[0].roh_daten || {};
+          }
+
+          // Berechne die isolierten Werte nur für diesen Monat (Aktuell minus Vormonats-Snapshot)
+          const isolierteMonatsListe = users.map(u => {
+            const vormonat = basisDaten[u.id] || { rundenAnwesend: 0, rundenBezahlt: 0, espresso: 0, schale: 0 };
+            return {
+              id: u.id,
+              name: u.name,
+              rundenAnwesend: Math.max(0, u.rundenAnwesend - vormonat.rundenAnwesend),
+              rundenBezahlt: Math.max(0, u.rundenBezahlt - vormonat.rundenBezahlt),
+              espresso: Math.max(0, u.espresso - vormonat.espresso),
+              schale: Math.max(0, u.schale - vormonat.schale)
+            };
+          });
+
+          // Monats-Statistiken kalkulieren
+          const monatProcessed = isolierteMonatsListe.map(u => {
+            const kosten = (u.espresso * prices.espresso) + (u.schale * prices.schale);
+            const quote = u.rundenAnwesend > 0 ? (u.rundenBezahlt / u.rundenAnwesend) * 100 : 0;
+            return { ...u, kosten, quote };
+          });
+
+          const totalAnwMonat = monatProcessed.reduce((sum, u) => sum + u.rundenAnwesend, 0);
+          const totalBezMonat = monatProcessed.reduce((sum, u) => sum + u.rundenBezahlt, 0);
+
+          const monatUsersWithSoll = monatProcessed.filter(u => u.rundenAnwesend > 0).map(u => {
+            const erwarteteRundenBezahlt = totalBezMonat * (u.rundenAnwesend / (totalAnwMonw || 1));
+            return { ...u, abweichung: u.quote - (u.rundenAnwesend > 0 ? (erwarteteRundenBezahlt / u.rundenAnwesend) * 100 : 0) };
+          });
+
+          const mGoenner = getTopUser(monatProcessed, 'rundenBezahlt');
+          const mDauerGast = getTopUser(monatProcessed, 'rundenAnwesend');
+          const mPechvogel = monatProcessed.filter(u => u.rundenAnwesend > 0).length > 0 
+            ? monatProcessed.filter(u => u.rundenAnwesend > 0).reduce((max, u) => u.quote > max.quote ? u : max, monatProcessed.filter(u => u.rundenAnwesend > 0)[0])
+            : { name: '-', quote: 0 };
+          const mFinanz = monatUsersWithSoll.length > 0 
+            ? monatUsersWithSoll.reduce((closest, u) => Math.abs(u.abweichung) < Math.abs(closest.abweichung) ? u : closest, monatUsersWithSoll[0])
+            : null;
+
+          // Speicher-Objekt für die Rohdaten dieses Monats (wichtig für die Differenz im Folgemonat)
+          const rohDatenSpeicher = {};
+          users.forEach(u => {
+            rohDatenSpeicher[u.id] = { rundenAnwesend: u.rundenAnwesend, rundenBezahlt: u.rundenBezahlt, espresso: u.espresso, schale: u.schale };
+          });
+
+          const snapshot = {
+            monat_jahr: promptMonat,
+            goenner: `${mGoenner.name} (+${mGoenner.rundenBezahlt} Rnd)`,
+            pechvogel: `${mPechvogel.name} (${mPechvogel.quote.toFixed(0)}% Quote)`,
+            finanz_stabil: mFinanz ? `${mFinanz.name} (${mFinanz.abweichung >= 0 ? '+' : ''}${mFinanz.abweichung.toFixed(0)}% Abw.)` : '-',
+            dauer_gast: `${mDauerGast.name} (+${mDauerGast.rundenAnwesend} Rnd)`,
+            roh_daten: rohDatenSpeicher
+          };
+
+          const { error } = await window.supabaseClient.from('kaffee_history').upsert(snapshot, { onConflict: 'monat_jahr' });
+          if (error) {
+            alert("Fehler beim Speichern: " + error.message);
+          } else {
+            alert(`Die Monatsauswertung für ${promptMonat} wurde erfolgreich berechnet und eingefroren!`);
+            fetchData();
+          }
+        };
+
+        const activeHistoryRecord = history.find(h => h.monat_jahr === selectedMonth);
 
         if (errorMsg) {
           return e('div', { className: 'p-4 bg-red-50 text-red-700 rounded-2xl border border-red-200 my-4 text-xs max-w-sm mx-auto text-center font-sans' },
@@ -156,7 +245,9 @@
 
         return e('div', { className: 'w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200 my-2 flex flex-col h-[95vh] font-sans' },
           e('div', { className: 'p-4 bg-gray-50 text-center border-b border-gray-200 shrink-0' },
-            e('h1', { className: 'text-xl font-bold text-amber-600 flex items-center justify-center gap-2' }, '☁️ Kaffee Manager Pro Cloud'),
+            e('h1', { className: 'text-xl font-bold text-amber-600 flex items-center justify-center gap-2' }, 
+              isReadOnly ? '📋 Kaffee Manager (Lesemodus)' : '☁️ Kaffee Manager Pro Cloud'
+            ),
             e('div', { className: 'grid grid-cols-2 gap-2 mt-3 bg-gray-200 p-1 rounded-xl' },
               e('button', { onClick: () => setActiveTab('input'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'input' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}` }, '📋 Input'),
               e('button', { onClick: () => setActiveTab('stats'), className: `py-2 text-xs font-semibold rounded-lg transition-all ${activeTab === 'stats' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-600'}` }, '📊 Stats')
@@ -164,7 +255,7 @@
           ),
           e('div', { className: 'flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50' },
             activeTab === 'input' ? [
-              e('div', { key: 'prices', className: 'bg-white p-3 rounded-2xl border border-gray-200 flex justify-around text-xs shadow-sm' },
+              !isReadOnly && e('div', { key: 'prices', className: 'bg-white p-3 rounded-2xl border border-gray-200 flex justify-around text-xs shadow-sm' },
                 e('div', { className: 'flex items-center gap-2' },
                   e('span', { className: 'text-amber-600 font-semibold' }, 'Espresso:'),
                   e('input', { type: 'number', step: '0.1', value: prices.espresso, onChange: (e) => handlePriceChange('espresso', e.target.value), className: 'w-12 bg-gray-50 border border-gray-300 rounded text-center font-bold text-gray-800 py-0.5' }),
@@ -178,22 +269,22 @@
                 e('button', { onClick: fetchData, className: 'text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded hover:bg-gray-300' }, '🔄 Sync')
               ),
               users.map(user => e('div', { key: user.id, className: 'bg-white p-4 rounded-2xl border border-gray-200 space-y-3 shadow-sm' },
-                e('input', { type: 'text', value: user.name, onChange: (e) => handleNameChange(user.id, e.target.value), className: 'bg-transparent font-bold text-base text-gray-900 border-b border-transparent focus:border-amber-500 focus:outline-none w-full pb-1' }),
+                e('input', { type: 'text', value: user.name, disabled: isReadOnly, onChange: (e) => handleNameChange(user.id, e.target.value), className: `bg-transparent font-bold text-base text-gray-900 focus:outline-none w-full pb-1 ${isReadOnly ? 'border-none' : 'border-b border-transparent focus:border-amber-500'}` }),
                 e('div', { className: 'grid grid-cols-2 gap-3 text-xs' },
                   e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center justify-between' },
                     e('span', { className: 'text-gray-500 text-[10px] font-bold tracking-wider mb-2' }, 'RUNDEN ANWESEND'),
                     e('div', { className: 'flex items-center justify-between w-full px-1' },
-                      e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-gray-100 text-gray-600' }, '-'),
-                      e('span', { className: 'text-sm font-bold text-gray-800' }, user.rundenAnwesend),
-                      e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-gray-100 text-gray-600' }, '+')
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm' }, '-'),
+                      e('span', { className: `text-sm font-bold text-gray-800 ${isReadOnly ? 'w-full text-center text-base py-2' : ''}` }, user.rundenAnwesend),
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'rundenAnwesend', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm' }, '+')
                     )
                   ),
                   e('div', { className: 'bg-gray-50 p-2 rounded-xl border border-gray-100 flex flex-col items-center justify-between' },
                     e('span', { className: 'text-gray-500 text-[10px] font-bold tracking-wider mb-2' }, 'RUNDEN BEZAHLT'),
                     e('div', { className: 'flex items-center justify-between w-full px-1' },
-                      e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-gray-100 text-gray-600' }, '-'),
-                      e('span', { className: 'text-sm font-bold text-emerald-600' }, user.rundenBezahlt),
-                      e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-gray-100 text-gray-600' }, '+')
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', -1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm' }, '-'),
+                      e('span', { className: `text-sm font-bold text-emerald-600 ${isReadOnly ? 'w-full text-center text-base py-2' : ''}` }, user.rundenBezahlt),
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'rundenBezahlt', 1), className: 'w-10 h-10 bg-white border border-gray-300 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm' }, '+')
                     )
                   )
                 ),
@@ -201,28 +292,47 @@
                   e('div', { className: 'bg-amber-50/50 p-2 rounded-xl border border-amber-100 flex flex-col items-center justify-between' },
                     e('span', { className: 'text-amber-800 text-[10px] font-bold tracking-wider mb-2' }, 'ESPRESSO'),
                     e('div', { className: 'flex items-center justify-between w-full px-1' },
-                      e('button', { onClick: () => updateCounter(user.id, 'espresso', -1), className: 'w-10 h-10 bg-white border border-amber-200 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-amber-100 text-amber-700' }, '-'),
-                      e('span', { className: 'text-sm font-bold text-gray-800' }, user.espresso),
-                      e('button', { onClick: () => updateCounter(user.id, 'espresso', 1), className: 'w-10 h-10 bg-white border border-amber-200 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-amber-100 text-amber-700' }, '+')
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'espresso', -1), className: 'w-10 h-10 bg-white border border-amber-200 rounded-lg flex items-center justify-center text-lg font-bold text-amber-700' }, '-'),
+                      e('span', { className: `text-sm font-bold text-gray-800 ${isReadOnly ? 'w-full text-center text-base py-2' : ''}` }, user.espresso),
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'espresso', 1), className: 'w-10 h-10 bg-white border border-amber-200 rounded-lg flex items-center justify-center text-lg font-bold text-amber-700' }, '+')
                     )
                   ),
                   e('div', { className: 'bg-orange-50/40 p-2 rounded-xl border border-orange-100 flex flex-col items-center justify-between' },
                     e('span', { className: 'text-amber-900 text-[10px] font-bold tracking-wider mb-2' }, 'SCHALE'),
                     e('div', { className: 'flex items-center justify-between w-full px-1' },
-                      e('button', { onClick: () => updateCounter(user.id, 'schale', -1), className: 'w-10 h-10 bg-white border border-orange-200 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-orange-100 text-amber-900' }, '-'),
-                      e('span', { className: 'text-sm font-bold text-gray-800' }, user.schale),
-                      e('button', { onClick: () => updateCounter(user.id, 'schale', 1), className: 'w-10 h-10 bg-white border border-orange-200 rounded-lg flex items-center justify-center text-lg font-bold shadow-sm active:bg-orange-100 text-amber-900' }, '+')
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'schale', -1), className: 'w-10 h-10 bg-white border border-orange-200 rounded-lg flex items-center justify-center text-lg font-bold text-amber-900' }, '-'),
+                      e('span', { className: `text-sm font-bold text-gray-800 ${isReadOnly ? 'w-full text-center text-base py-2' : ''}` }, user.schale),
+                      !isReadOnly && e('button', { onClick: () => updateCounter(user.id, 'schale', 1), className: 'w-10 h-10 bg-white border border-orange-200 rounded-lg flex items-center justify-center text-lg font-bold text-amber-900' }, '+')
                     )
                   )
                 )
               ))
             ] : [
+              // Historischer Rückblick (Isoliert berechnet auf diesen einen Monat)
+              history.length > 0 && e('div', { key: 'month-history-box', className: 'bg-amber-600 text-white p-4 rounded-2xl shadow-md space-y-2' },
+                e('div', { className: 'flex justify-between items-center border-b border-amber-500 pb-2 mb-2' },
+                  e('span', { className: 'text-xs font-bold uppercase tracking-wider' }, '⭐ Reines Monats-Ergebnis'),
+                  e('select', { 
+                    value: selectedMonth, 
+                    onChange: (e) => setSelectedMonth(e.target.value),
+                    className: 'bg-amber-700 text-white font-bold text-xs p-1 rounded border border-amber-500 focus:outline-none'
+                  }, history.map(h => e('option', { key: h.monat_jahr, value: h.monat_jahr, className: 'text-gray-800' }, h.monat_jahr)))
+                ),
+                activeHistoryRecord ? [
+                  e('div', { key: 'h-g', className: 'flex justify-between text-xs' }, e('span', { className: 'opacity-80 font-medium' }, '👑 Gönner des Monats:'), e('span', { className: 'font-bold' }, activeHistoryRecord.goenner)),
+                  e('div', { key: 'h-p', className: 'flex justify-between text-xs' }, e('span', { className: 'opacity-80 font-medium' }, '🪶 Pechvogel:'), e('span', { className: 'font-bold' }, activeHistoryRecord.pechvogel)),
+                  e('div', { key: 'h-f', className: 'flex justify-between text-xs' }, e('span', { className: 'opacity-80 font-medium' }, '⚖️ Finanz-Stabilität:'), e('span', { className: 'font-bold' }, activeHistoryRecord.finanz_stabil)),
+                  e('div', { key: 'h-d', className: 'flex justify-between text-xs' }, e('span', { className: 'opacity-80 font-medium' }, '🏃‍♂️ Dauer-Gast:'), e('span', { className: 'font-bold' }, activeHistoryRecord.dauer_gast))
+                ] : e('p', { className: 'text-xs italic opacity-70' }, 'Keine Daten vorhanden.')
+              ),
+
               e('div', { key: 'total-exp', className: 'bg-white p-4 rounded-2xl border border-gray-200 shadow-sm text-center' },
-                e('span', { className: 'text-[10px] text-gray-400 font-bold block tracking-wider' }, 'AUSGABEN GESAMT'),
+                e('span', { className: 'text-[10px] text-gray-400 font-bold block tracking-wider' }, 'AUSGABEN GESAMT (ALL-TIME)'),
                 e('span', { className: 'text-2xl font-black text-emerald-600' }, processedUsers.reduce((sum, u) => sum + u.kosten, 0).toFixed(2) + ' CHF')
               ),
+              
               top3Dringlichkeit.length > 0 && e('div', { key: 'dringlichkeit', className: 'bg-red-50 border border-red-200 p-4 rounded-2xl shadow-sm text-xs' },
-                e('span', { className: 'text-red-700 font-bold block mb-2 tracking-wider' }, '🚨 TOP 3 ZAHLUNGS-DRINGLICHKEIT (Mind. 10 Rnd)'),
+                e('span', { className: 'text-red-700 font-bold block mb-2 tracking-wider' }, '🚨 AKTUELLER DRINGLICHKEITS-STATUS (ALL-TIME Basis)'),
                 e('div', { className: 'divide-y divide-red-200/60' },
                   top3Dringlichkeit.map((u, i) => e('div', { key: u.id, className: 'flex justify-between items-center py-1.5' },
                     e('span', { className: 'font-bold text-gray-800' }, (i + 1) + '. ' + u.name),
@@ -230,27 +340,30 @@
                   ))
                 )
               ),
+
               e('div', { key: 'awards', className: 'bg-white p-4 rounded-2xl border border-gray-200 space-y-3 shadow-sm text-xs' },
-                e('h3', { className: 'font-bold text-amber-600 border-b pb-1.5 tracking-wider' }, '🏅 MEILENSTEINE & FUN-AWARDS (Mind. 10 Rnd)'),
+                e('h3', { className: 'font-bold text-amber-600 border-b pb-1.5 tracking-wider' }, '🏅 ALL-TIME MEILENSTEINE (Gesamtstände)'),
                 e('div', { className: 'space-y-2.5' },
                   e('div', { className: 'bg-gray-50 p-2.5 rounded-xl flex justify-between items-center border border-gray-100' },
-                    e('div', null, e('span', { className: 'text-emerald-600 block font-bold text-[10px]' }, 'DER GÖNNER'), e('span', { className: 'font-bold text-gray-800 text-sm' }, goenner.name)),
+                    e('div', null, e('span', { className: 'text-emerald-600 block font-bold text-[10px]' }, 'DER GÖNNER (ALL-TIME)'), e('span', { className: 'font-bold text-gray-800 text-sm' }, goenner.name)),
                     e('div', { className: 'text-right' }, e('span', { className: 'text-xs font-semibold bg-white px-2 py-0.5 rounded-lg border block' }, goenner.rundenBezahlt + ' Rnd bezahlt'), e('span', { className: 'text-[10px] text-gray-400 font-bold mt-0.5 block pr-1' }, (goenner.kosten ? goenner.kosten.toFixed(2) : '0.00') + ' CHF'))
                   ),
                   e('div', { className: 'bg-gray-50 p-2.5 rounded-xl flex justify-between items-center border border-gray-100' },
-                    e('div', null, e('span', { className: 'text-red-500 block font-bold text-[10px]' }, 'PECHVOGEL (Höchste Zahl-Quote)'), e('span', { className: 'font-bold text-gray-800 text-sm' }, pechvogel.name)),
+                    e('div', null, e('span', { className: 'text-red-500 block font-bold text-[10px]' }, 'PECHVOGEL'), e('span', { className: 'font-bold text-gray-800 text-sm' }, pechvogel.name)),
                     e('span', { className: 'text-xs font-semibold bg-white px-2 py-1 rounded-lg border' }, (pechvogel.quote ? pechvogel.quote.toFixed(0) : 0) + '% Quote')
                   ),
                   finanzStabilitaetUser && e('div', { className: 'bg-gray-50 p-2.5 rounded-xl flex justify-between items-center border border-gray-100' },
-                    e('div', null, e('span', { className: 'text-teal-600 block font-bold text-[10px]' }, 'FINANZ-STABILITÄT (Am nächsten am Soll von ' + finanzStabilitaetUser.individuelleSollQuoteInProzent.toFixed(0) + '%)'), e('span', { className: 'font-bold text-gray-800 text-sm' }, finanzStabilitaetUser.name)),
+                    e('div', null, e('span', { className: 'text-teal-600 block font-bold text-[10px]' }, 'FINANZ-STABILITÄT'), e('span', { className: 'font-bold text-gray-800 text-sm' }, finanzStabilitaetUser.name)),
                     e('span', { className: 'text-xs font-semibold bg-white px-2 py-1 rounded-lg border' }, (finanzStabilitaetUser.abweichung >= 0 ? '+' : '') + finanzStabilitaetUser.abweichung.toFixed(0) + '% Abw.')
                   ),
                   e('div', { className: 'bg-gray-50 p-2.5 rounded-xl flex justify-between items-center border border-gray-100' },
-                    e('div', null, e('span', { className: 'text-purple-600 block font-bold text-[10px]' }, 'DER DAUER-GAST (Meiste Kaffeepausen)'), e('span', { className: 'font-bold text-gray-800 text-sm' }, dauerGast.name)),
+                    e('div', null, e('span', { className: 'text-purple-600 block font-bold text-[10px]' }, 'DER DAUER-GAST'), e('span', { className: 'font-bold text-gray-800 text-sm' }, dauerGast.name)),
                     e('span', { className: 'text-xs font-semibold bg-white px-2 py-1 rounded-lg border' }, dauerGast.rundenAnwesend + ' Rnd anwesend')
                   )
-                )
+                ),
+                !isReadOnly && e('button', { onClick: saveCurrentMonthSnapshot, className: 'w-full py-2 bg-amber-100 text-amber-700 border border-amber-200 rounded-xl font-bold text-xs mt-2 transition-all active:bg-amber-200' }, '📸 Reines Monatsergebnis berechnen & einfrieren')
               ),
+
               e('div', { key: 'table', className: 'bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm text-xs' },
                 e('div', { className: 'overflow-x-auto' },
                   e('table', { className: 'w-full text-left border-collapse text-[11px]' },
@@ -271,10 +384,10 @@
                   )
                 )
               ),
-              // Hier ist der reaktivierte Backup Knopf
-              e('button', { key: 'backup-btn', onClick: downloadBackup, className: 'w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-semibold mt-4 transition-all shadow-sm' }, '💾 Backup manuell auf Smartphone laden (JSON)')
+              !isReadOnly && e('button', { key: 'backup-btn', onClick: downloadBackup, className: 'w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-semibold mt-4 transition-all shadow-sm' }, '💾 Backup manuell auf Smartphone laden (JSON)')
             ]
-          )
+          ),
+          e('div', { className: 'p-2 bg-gray-50 text-center text-[10px] text-gray-400 border-t border-gray-200 shrink-0' }, 'Kaffee Manager Pro v2.2.0 (Isolierte Auswertung)')
         );
       }
 
